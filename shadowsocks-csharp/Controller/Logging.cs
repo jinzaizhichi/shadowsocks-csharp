@@ -1,27 +1,34 @@
 ﻿using System;
-using System.Collections.Generic;
+using System.ComponentModel;
 using System.IO;
 using System.Net.Sockets;
+using System.Net;
+using System.Diagnostics;
 using System.Text;
+using Shadowsocks.Util;
+using Shadowsocks.Util.SystemProxy;
 
 namespace Shadowsocks.Controller
 {
     public class Logging
     {
-        public static string LogFile;
+        public static string LogFilePath;
+
+        private static FileStream _fs;
+        private static StreamWriterWithTimestamp _sw;
 
         public static bool OpenLogFile()
         {
             try
             {
-                string temppath = Path.GetTempPath();
-                LogFile = Path.Combine(temppath, "shadowsocks.log");
-                FileStream fs = new FileStream(LogFile, FileMode.Append);
-                StreamWriterWithTimestamp sw = new StreamWriterWithTimestamp(fs);
-                sw.AutoFlush = true;
-                Console.SetOut(sw);
-                Console.SetError(sw);
-                
+                LogFilePath = Utils.GetTempPath("shadowsocks.log");
+
+                _fs = new FileStream(LogFilePath, FileMode.Append);
+                _sw = new StreamWriterWithTimestamp(_fs);
+                _sw.AutoFlush = true;
+                Console.SetOut(_sw);
+                Console.SetError(_sw);
+
                 return true;
             }
             catch (IOException e)
@@ -29,6 +36,70 @@ namespace Shadowsocks.Controller
                 Console.WriteLine(e.ToString());
                 return false;
             }
+        }
+
+        private static void WriteToLogFile(object o)
+        {
+            try {
+                Console.WriteLine(o);
+            } catch(ObjectDisposedException) {
+            }
+        }
+
+        public static void Error(object o)
+        {
+            WriteToLogFile("[E] " + o);
+        }
+
+        public static void Info(object o)
+        {
+            WriteToLogFile(o);
+        }
+
+        public static void Clear() {
+            _sw.Close();
+            _sw.Dispose();
+            _fs.Close();
+            _fs.Dispose();
+            File.Delete(LogFilePath);
+            OpenLogFile();
+        }
+
+        [Conditional("DEBUG")]
+        public static void Debug(object o)
+        {
+            WriteToLogFile("[D] " + o);
+        }
+
+        [Conditional("DEBUG")]
+        public static void Dump(string tag, byte[] arr, int length)
+        {
+            var sb = new StringBuilder($"{Environment.NewLine}{tag}: ");
+            for (int i = 0; i < length - 1; i++) {
+                sb.Append($"0x{arr[i]:X2}, ");
+            }
+            sb.Append($"0x{arr[length - 1]:X2}");
+            sb.Append(Environment.NewLine);
+            Debug(sb.ToString());
+        }
+
+        [Conditional("DEBUG")]
+        public static void Debug(EndPoint local, EndPoint remote, int len, string header = null, string tailer = null)
+        {
+            if (header == null && tailer == null)
+                Debug($"{local} => {remote} (size={len})");
+            else if (header == null && tailer != null)
+                Debug($"{local} => {remote} (size={len}), {tailer}");
+            else if (header != null && tailer == null)
+                Debug($"{header}: {local} => {remote} (size={len})");
+            else
+                Debug($"{header}: {local} => {remote} (size={len}), {tailer}");
+        }
+
+        [Conditional("DEBUG")]
+        public static void Debug(Socket sock, int len, string header = null, string tailer = null)
+        {
+            Debug(sock.LocalEndPoint, sock.RemoteEndPoint, len, header, tailer);
         }
 
         public static void LogUsefulException(Exception e)
@@ -48,19 +119,57 @@ namespace Shadowsocks.Controller
                 }
                 else if (se.SocketErrorCode == SocketError.NotConnected)
                 {
-                    // close when not connected
+                    // The application tried to send or receive data, and the System.Net.Sockets.Socket is not connected.
+                }
+                else if (se.SocketErrorCode == SocketError.HostUnreachable)
+                {
+                    // There is no network route to the specified host.
+                }
+                else if (se.SocketErrorCode == SocketError.TimedOut)
+                {
+                    // The connection attempt timed out, or the connected host has failed to respond.
                 }
                 else
                 {
-                    Console.WriteLine(e);
+                    Info(e);
                 }
+            }
+            else if (e is ObjectDisposedException)
+            {
+            }
+            else if (e is Win32Exception)
+            {
+                var ex = (Win32Exception) e;
+
+                // Win32Exception (0x80004005): A 32 bit processes cannot access modules of a 64 bit process.
+                if ((uint) ex.ErrorCode != 0x80004005)
+                {
+                    Info(e);
+                }
+            }
+            else if (e is ProxyException)
+            {
+                var ex = (ProxyException)e;
+                switch (ex.Type)
+                {
+                    case ProxyExceptionType.FailToRun:
+                    case ProxyExceptionType.QueryReturnMalformed:
+                    case ProxyExceptionType.SysproxyExitError:
+                        Error($"sysproxy - {ex.Type.ToString()}:{ex.Message}");
+                        break;
+                    case ProxyExceptionType.QueryReturnEmpty:
+                    case ProxyExceptionType.Unspecific:
+                        Error($"sysproxy - {ex.Type.ToString()}");
+                        break;
+                }
+
+
             }
             else
             {
-                Console.WriteLine(e);
+                Info(e);
             }
         }
-
     }
 
     // Simply extended System.IO.StreamWriter for adding timestamp workaround

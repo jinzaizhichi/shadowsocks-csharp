@@ -1,46 +1,55 @@
-﻿using Shadowsocks.Properties;
-using System;
+﻿using System;
 using System.Collections.Generic;
-using System.Text;
-using System.Text.RegularExpressions;
+using System.Globalization;
+using System.IO;
 
 namespace Shadowsocks.Controller
 {
-    public class I18N
+    using Shadowsocks.Properties;
+
+    public static class I18N
     {
-        protected static Dictionary<string, string> Strings;
-        static I18N()
+        private static Dictionary<string, string> _strings = new Dictionary<string, string>();
+
+        private static void Init(string res)
         {
-            Strings = new Dictionary<string, string>();
-            
-            if (System.Globalization.CultureInfo.CurrentCulture.IetfLanguageTag.ToLowerInvariant().StartsWith("zh"))
+            using (var sr = new StringReader(res))
             {
-                string[] lines = Regex.Split(Resources.cn, "\r\n|\r|\n");
-                foreach (string line in lines)
+                foreach (var line in sr.NonWhiteSpaceLines())
                 {
-                    if (line.StartsWith("#"))
-                    {
+                    if (line[0] == '#')
                         continue;
-                    }
-                    string[] kv = Regex.Split(line, "=");
-                    if (kv.Length == 2)
-                    {
-                        Strings[kv[0]] = kv[1];
-                    }
+
+                    var pos = line.IndexOf('=');
+                    if (pos < 1)
+                        continue;
+                    _strings[line.Substring(0, pos)] = line.Substring(pos + 1);
                 }
             }
         }
 
-        public static string GetString(string key)
+        static I18N()
         {
-            if (Strings.ContainsKey(key))
+            string name = CultureInfo.CurrentCulture.EnglishName;
+            if (name.StartsWith("Chinese", StringComparison.OrdinalIgnoreCase))
             {
-                return Strings[key];
+                // choose Traditional Chinese only if we get explicit indication
+                Init(name.Contains("Traditional")
+                    ? Resources.zh_TW
+                    : Resources.zh_CN);
             }
-            else
+            else if (name.StartsWith("Japan", StringComparison.OrdinalIgnoreCase))
             {
-                return key;
+                Init(Resources.ja);
             }
         }
+
+        public static string GetString(string key, params object[] args)
+        {
+            return _strings.ContainsKey(key)
+                ? string.Format(_strings[key], args)
+                : string.Format(key, args);
+        }
+
     }
 }
